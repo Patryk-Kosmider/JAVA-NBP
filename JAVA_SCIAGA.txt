@@ -1,0 +1,182 @@
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+</dependencies>
+
+# KONFIGURACJA JPA apllication.properties
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/your_database_name
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+spring.jpa.hibernate.ddl-auto=update
+
+# Optional: Show SQL statements in the console
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+
+
+#SERVICE
+
+@Service
+public class NbpService {
+    
+    private final RestTemplate restTemplate;
+
+    @Autowired
+    public NbpService(RestTemplateBuilder restTemplateBuilder) {
+        this.restTemplate = restTemplateBuilder.build();
+    }
+
+    public Double getAverageExchangeRate(String currency, int days) {
+        String url = String.format("http://api.nbp.pl/api/exchangerates/rates/a/%s/last/%d/?format=json", currency, days);
+        ResponseEntity<NbpResponse> response = restTemplate.getForEntity(url, NbpResponse.class);
+
+        if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+            return response.getBody().getRates().stream()
+                .mapToDouble(Rate::getMid)
+                .average()
+                .orElseThrow(() -> new NoSuchElementException("No rates found"));
+        } else {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Currency data not found");
+        }
+    }
+}
+
+#KONTROLER
+
+@RestController
+@RequestMapping("/api/exchange-rate")
+public class ExchangeRateController {
+
+    private final NbpService nbpService;
+    private final RequestLogRepository requestLogRepository;
+
+    @Autowired
+    public ExchangeRateController(NbpService nbpService, RequestLogRepository requestLogRepository) {
+        this.nbpService = nbpService;
+        this.requestLogRepository = requestLogRepository;
+    }
+
+    @GetMapping("/{currency}")
+    public ResponseEntity<Double> getExchangeRate(
+            @PathVariable String currency,
+            @RequestParam(required = false, defaultValue = "1") int days) {
+
+        // Fetch the average exchange rate
+        Double averageRate = nbpService.getAverageExchangeRate(currency, days);
+        
+        // Create a new request log entry with the required details
+        RequestLog requestLog = new RequestLog();
+        requestLog.setCurrency(currency);
+        requestLog.setDays(days);
+        requestLog.setRate(averageRate);
+        requestLog.setRequestTime(LocalDateTime.now());
+        
+        // Save the request log entry to the database
+        requestLogRepository.save(requestLog);
+
+        return ResponseEntity.ok(averageRate);
+    }
+}
+
+#OBIEKT REQUEST
+
+@Entity
+public class RequestLog {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String currency;
+    private int days;
+    private Double rate;
+    private LocalDateTime requestTime;
+
+    // Default constructor
+    public RequestLog() {}
+
+    // Getters and Setters
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public void setCurrency(String currency) {
+        this.currency = currency;
+    }
+
+    public int getDays() {
+        return days;
+    }
+
+    public void setDays(int days) {
+        this.days = days;
+    }
+
+    public Double getRate() {
+        return rate;
+    }
+
+    public void setRate(Double rate) {
+        this.rate = rate;
+    }
+
+    public LocalDateTime getRequestTime() {
+        return requestTime;
+    }
+
+    public void setRequestTime(LocalDateTime requestTime) {
+        this.requestTime = requestTime;
+    }
+}
+
+#ROZSZERZENIE INTERFEJSU (JPA ZAPIS DO BAZY)
+public interface RequestLogRepository extends JpaRepository<RequestLog, Long> {
+}
+
+# OBSLUGA BLEDOW
+
+@ControllerAdvice
+public class CustomExceptionHandler extends ResponseEntityExceptionHandler {
+
+    @ExceptionHandler({ ResponseStatusException.class })
+    protected ResponseEntity<Object> handleConflict(ResponseStatusException ex, WebRequest request) {
+        return handleExceptionInternal(ex, ex.getReason(),
+                new HttpHeaders(), ex.getStatus(), request);
+    }
+
+    @ExceptionHandler({ NoSuchElementException.class })
+    protected ResponseEntity<Object> handleNoSuchElement(NoSuchElementException ex, WebRequest request) {
+        return handleExceptionInternal(ex, "No data available",
+                new HttpHeaders(), HttpStatus.NOT_FOUND, request);
+    }
+}
+
+
+@SpringBootApplication
+public class ExchangeRateApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(ExchangeRateApplication.class, args);
+    }
+}
