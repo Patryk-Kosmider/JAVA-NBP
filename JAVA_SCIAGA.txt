@@ -181,3 +181,32 @@ public class ExchangeRateApplication {
         SpringApplication.run(ExchangeRateApplication.class, args);
     }
 }
+
+# NBPresponse obiekt
+import java.util.List;
+
+public class NbpResponse {
+    private List<Rate> rates;
+
+    // Getters and Setters
+    public List<Rate> getRates() {
+        return rates;
+    }
+
+    public void setRates(List<Rate> rates) {
+        this.rates = rates;
+    }
+}
+
+public class Rate {
+    private Double mid;
+
+    // Getters and Setters
+    public Double getMid() {
+        return mid;
+    }
+
+    public void setMid(Double mid) {
+        this.mid = mid;
+    }
+}
